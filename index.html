@@ -1,0 +1,951 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0}[hidden]{display:none!important}img{max-width:100%}</style>
+<meta name="description" content="3채널 400MS/s NS-SAR ADC 행동 모델: CDAC Cs와 hold cap C_H에 따른 FFT, TI spur, SNDR, 전력 추정">
+<title>3채널 NS-SAR 탐색기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: 계측기 패널 — 왼쪽 조절 레일(스크롤), 오른쪽 결과(요약 → FFT → 전력 → 스윕 → 예산) */
+:root {
+  --bg: #f3f5f6; --panel: #ffffff; --ink: #11171b; --ink-2: #47535a; --ink-3: #75828a;
+  --line: #d9e0e4; --grid: #e8edf0; --accent: #0e6a86; --accent-weak: #e3f0f4;
+  --band: rgba(14, 106, 134, 0.07);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300;
+  --ref: #8b969c;
+  --good: #1d7f47; --warn: #a66a00; --bad: #c13b3b;
+  --f-body: "IBM Plex Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101416; --panel: #171c1f; --ink: #eaf0f2; --ink-2: #aeb9bf; --ink-3: #7b878d;
+    --line: #2a3237; --grid: #20282d; --accent: #4cb2cf; --accent-weak: #16303a;
+    --band: rgba(76, 178, 207, 0.08);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
+    --ref: #7a858a; --good: #3fb871; --warn: #d9a441; --bad: #e46a6a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101416; --panel: #171c1f; --ink: #eaf0f2; --ink-2: #aeb9bf; --ink-3: #7b878d;
+  --line: #2a3237; --grid: #20282d; --accent: #4cb2cf; --accent-weak: #16303a;
+  --band: rgba(76, 178, 207, 0.08);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
+  --ref: #7a858a; --good: #3fb871; --warn: #d9a441; --bad: #e46a6a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.5; }
+.wrap { max-width: 1440px; margin: 0 auto; padding-inline: 20px; padding-block: 20px 48px; display: grid; gap: 16px; }
+header { display: grid; gap: 8px; }
+h1 { font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.sub { color: var(--ink-2); margin: 0; max-width: 80ch; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-family: var(--f-mono); font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-2); background: var(--panel); }
+.layout { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+aside { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 14px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); max-height: calc(100vh - 24px); overflow-y: auto; }
+@media (max-width: 900px) { aside { position: static; max-height: none; } }
+.group { display: grid; gap: 10px; }
+.group h2, details.group > summary { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); margin: 0; }
+details.group > summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; }
+details.group > summary::after { content: "+"; font-family: var(--f-mono); }
+details.group[open] > summary::after { content: "−"; }
+details.group[open] > summary { margin-bottom: 4px; }
+.ctl { display: grid; gap: 2px; }
+.ctl .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.ctl label { color: var(--ink-2); font-size: 13px; }
+.ctl output { font-family: var(--f-mono); font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ctl .hint { font-size: 11.5px; color: var(--ink-3); }
+input[type=range] { width: 100%; accent-color: var(--accent); margin: 2px 0; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { flex: 1; font: inherit; font-size: 12.5px; padding: 6px 4px; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button:disabled { opacity: 0.4; cursor: default; }
+.seg button[aria-pressed="true"] { background: var(--accent-weak); color: var(--ink); font-weight: 600; }
+.seg button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); }
+select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); width: 100%; }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; }
+main { display: grid; gap: 16px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 10px; min-width: 0; }
+.card h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.card .note { margin: 0; color: var(--ink-3); font-size: 12.5px; max-width: 90ch; }
+.head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; }
+.tile .k { font-size: 12px; color: var(--ink-3); }
+.tile .v { font-family: var(--f-mono); font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.tile .v small { font-size: 12px; color: var(--ink-2); margin-left: 3px; }
+.tile .d { font-size: 11.5px; color: var(--ink-2); font-family: var(--f-mono); }
+.status { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; display: inline-flex; gap: 5px; align-items: center; }
+.pill.good { color: var(--good); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); }
+.pill b { font-weight: 600; }
+.chartbox { position: relative; width: 100%; }
+.chartbox canvas { display: block; width: 100%; }
+.viewrow { align-items: center; }
+.fft-head { font-size: 15px; color: var(--ink); }
+.fft-head b { font-weight: 600; color: var(--s1); }
+.fft-head span { color: var(--ink-3); font-family: var(--f-mono); font-size: 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; font-size: 12px; font-family: var(--f-mono); color: var(--ink); box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap; z-index: 2; }
+.tip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.stack { display: flex; height: 26px; border-radius: 5px; overflow: hidden; gap: 2px; background: var(--panel); }
+.stack div { min-width: 0; }
+.stack div:first-child { border-radius: 4px 0 0 4px; } .stack div:last-child { border-radius: 0 4px 4px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
+th { font-size: 11.5px; color: var(--ink-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+td.n { font-family: var(--f-mono); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th.n { text-align: right; }
+.tscroll { overflow-x: auto; }
+.bar-cell { width: 34%; }
+.minibar { height: 8px; border-radius: 4px; background: var(--s1); }
+.sweeps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .sweeps { grid-template-columns: minmax(0, 1fr); } }
+.sweeps .title { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.busy { font-size: 12px; color: var(--ink-3); font-family: var(--f-mono); }
+.two { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 1100px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>3채널 NS-SAR 탐색기</h1>
+    <p class="sub">CDAC 샘플링 C와 hold cap C_H를 바꾸면서 FFT, TI spur, SNDR, 전력 추정이 어떻게 바뀌는지 보는 행동 모델입니다. 브라우저에서 매번 SAR 판단을 직접 시뮬레이션합니다. 잡음·매칭·전력 계수는 모두 가정값이며 PDK 예측이 아닙니다.</p>
+    <div class="chips">
+      <span class="chip">400 MS/s · 3ch × 133.3 MS/s</span><span class="chip">BW 50 MHz · OSR 4</span>
+      <span class="chip">F 1 ns / S 1 ns / Conv 5.5 ns</span><span class="chip">12-bit · 2-tap midway (1.5 / 4.0 ns)</span>
+      <span class="chip">hold cap 3개, 리셋 없이 누적</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside id="controls" aria-label="조절"></aside>
+
+    <main>
+      <div class="tiles" id="tiles"></div>
+      <div class="status" id="status" aria-live="polite"></div>
+
+      <section class="card">
+        <div class="head">
+          <h3>출력 스펙트럼</h3>
+          <div class="btnrow">
+            <button type="button" class="btn" id="pinBtn">현재 결과 고정 비교</button>
+            <span class="busy" id="busy"></span>
+          </div>
+        </div>
+        <div class="btnrow viewrow">
+          <div class="seg" role="group" aria-label="보는 구간">
+            <button type="button" id="vwBand" aria-pressed="true">대역 내 0~50 MHz</button>
+            <button type="button" id="vwFull" aria-pressed="false">전체 0~200 MHz</button>
+            <button type="button" id="vwFs3" aria-pressed="false">fs/3 spur 부근</button>
+          </div>
+          <div class="seg" role="group" aria-label="주파수 축">
+            <button type="button" id="axLin" aria-pressed="true">선형</button>
+            <button type="button" id="axLog" aria-pressed="false">log</button>
+          </div>
+          <div class="seg" role="group" aria-label="세로축">
+            <button type="button" id="yZoom" aria-pressed="true">잡음 바닥 확대</button>
+            <button type="button" id="yAll" aria-pressed="false">−160~0 dB</button>
+          </div>
+          <label class="check"><input type="checkbox" id="rawChk">원본 bin 표시</label>
+        </div>
+        <div class="fft-head" id="fftHead"></div>
+        <div class="legend" id="fftLegend"></div>
+        <div class="chartbox" id="fftBox"><canvas id="fft" height="300" aria-label="출력 FFT 스펙트럼"></canvas></div>
+        <p class="note">Hann 창, 0 dBFS = 풀스케일 사인. 선은 주파수 폭 평균, 점선은 대역 내 평균 잡음 수준(bin당)입니다. 두 점선의 간격이 NS로 줄어든 잡음입니다. 잡음 바닥을 확대하면 신호는 위쪽 화살표로만 표시합니다. fs/3 spur와 image는 대역 밖입니다.</p>
+      </section>
+
+      <div class="two">
+        <section class="card">
+          <div class="head"><h3>전력 추정</h3><span class="busy" id="pwTotal"></span></div>
+          <div class="stack" id="pwStack" aria-hidden="true"></div>
+          <div class="tscroll"><table id="pwTable"></table></div>
+          <p class="note">DAC = α·2·Cs·Vref²·fs/η, bootstrap ∝ Cs(스위치를 Cs에 맞춰 키울 때), comparator 에너지 ∝ 1/σ², FIA = 2·g·C_L·nV_T·VDD·k, C_L = 3·C_H + C_par. 입력 드라이버와 기준전압 버퍼 자체 전력은 η로만 반영했습니다. 기본값은 이전 07 분석의 Zhao 기반 추정(1.4 GS/s에서 15.8 mW)을 400 MS/s로 비례 환산한 약 4.5 mW 부근에 맞춘 가정입니다.</p>
+        </section>
+        <section class="card">
+          <div class="head"><h3>대역 내 잡음 예산 (해석식)</h3><span class="busy" id="nbTotal"></span></div>
+          <div class="tscroll"><table id="nbTable"></table></div>
+          <p class="note">white 잡음 가정의 해석식입니다. CDAC 매칭, comparator offset에 의한 overload, 왜곡은 시뮬레이션에만 들어가므로 시뮬레이션 SNDR과의 차이가 곧 그 항목들의 영향입니다.</p>
+        </section>
+      </div>
+
+      <section class="card">
+        <div class="head">
+          <h3>C 스윕</h3>
+          <div class="btnrow">
+            <div class="seg" role="group" aria-label="스윕 변수">
+              <button type="button" id="swCs" aria-pressed="true">CDAC Cs</button>
+              <button type="button" id="swCH" aria-pressed="false">hold C_H</button>
+            </div>
+            <span class="busy" id="swBusy"></span>
+          </div>
+        </div>
+        <div class="sweeps">
+          <div><div class="title">SNDR [dB]</div><div class="chartbox" id="sw1Box"><canvas id="sw1" height="220"></canvas></div></div>
+          <div><div class="title">전력 [mW]</div><div class="chartbox" id="sw2Box"><canvas id="sw2" height="220"></canvas></div></div>
+          <div><div class="title">FoMs = SNDR + 10·log(BW/P) [dB]</div><div class="chartbox" id="sw3Box"><canvas id="sw3" height="220"></canvas></div></div>
+        </div>
+        <p class="note">각 점은 N = 4096 짧은 시뮬레이션이라 현재 설정(N 16384)보다 ±0.5 dB 정도 흔들립니다. 원은 현재 값입니다. FoMs 점선은 폴더 논문의 실측값(Jie 166.3, Lin 171.3, Zhao 173.1 dB)입니다.</p>
+        <details><summary class="busy" style="cursor:pointer">스윕 수치 표</summary><div class="tscroll"><table id="swTable"></table></div></details>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+// ===== 3ch TI NS-SAR behavioral core (bcast/own/off hold-cap integrator) =====
+const kB = 1.380649e-23, TK = 300, FS = 400e6, TCONV = 5.5e-9, TTRACK = 1e-9;
+const W12 = [1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1, 0.5];
+const W14 = [1024, 512, 256, 128, 64, 32, 16, 8, 8, 4, 2, 2, 1, 0.5];
+// 결정적 채널 mismatch 패턴 (3채널 rms = 1)
+const PAT = [[1.2247, -1.2247, 0], [0, 1.2247, -1.2247], [-1.2247, 0, 1.2247]];
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function gaussian(r) {
+  let spare = null;
+  return function () {
+    if (spare !== null) { const s = spare; spare = null; return s; }
+    let u = 0; while (u === 0) u = r();
+    const v = r(), m = Math.sqrt(-2 * Math.log(u));
+    spare = m * Math.sin(2 * Math.PI * v);
+    return m * Math.cos(2 * Math.PI * v);
+  };
+}
+
+// 파라미터 -> 물리량
+function derive(p) {
+  const w = p.nd === 14 ? W14 : W12, nd = w.length;
+  const sumw = w.reduce((a, b) => a + b, 0);
+  const Cu = p.Cs / (2 * sumw);                       // unit = 0.5 LSB weight
+  const sigU = p.Acu / 100 / Math.sqrt(Cu * 1e15);    // Pelgrom: A/sqrt(C[fF])
+  const sigCH = p.Acu / 100 / Math.sqrt(p.CH * 1e15);
+  const tau = p.swMode === 'scaled' ? p.tau0 : p.tau0 * p.Cs / 1e-12;
+  const CL = (p.mode === 'own' ? 1 : 3) * p.CH + p.Cpar;
+  const sFia = p.fiaAuto ? (p.g > 0 ? Math.sqrt(2 * kB * TK * p.gamma / (p.g * CL)) : 0) : p.sFia;
+  return {
+    w, nd, sumw, Cu, sigU, sigCH, tau, CL, sFia,
+    sSamp: Math.sqrt(2 * kB * TK / p.Cs),
+    sHold: Math.sqrt(2 * kB * TK / p.CH),
+    sKick: p.qKick / p.CH,
+    tbit: TCONV / nd,
+    settleRatio: TTRACK / tau
+  };
+}
+
+// C_H 상태 구성비: sample n 변환 중 (갱신 n-3, n-2, n-1)
+function mixAt(t) {
+  if (t < 0.5e-9) return [1, 0, 0];
+  if (t < 1.5e-9) { const a = (t - 0.5e-9) / 1e-9; return [1 - a, a, 0]; }
+  if (t < 3.0e-9) return [0, 1, 0];
+  if (t < 4.0e-9) { const a = (t - 3.0e-9) / 1e-9; return [0, 1 - a, a]; }
+  return [0, 0, 1];
+}
+
+function simulate(p, d, N, fbin, modeOverride) {
+  const mode = modeOverride || p.mode;
+  const gm = gaussian(mulberry32(p.seed * 7919 + 13));      // mismatch draw (고정)
+  const gn = gaussian(mulberry32(p.seed * 104729 + 7));     // 잡음
+  const w = d.w, nd = d.nd, lsb = p.vfs / 4096;
+  const wa = [];
+  for (let c = 0; c < 3; c++) {
+    const row = new Float64Array(nd);
+    for (let i = 0; i < nd; i++) row[i] = w[i] * (1 + d.sigU / Math.sqrt(Math.max(2 * w[i], 1)) * gm());
+    wa.push(row);
+  }
+  const M = new Float64Array(nd * 3);
+  for (let i = 0; i < nd; i++) { const m = mixAt(i * d.tbit); M[3 * i] = m[0]; M[3 * i + 1] = m[1]; M[3 * i + 2] = m[2]; }
+  const A = Math.pow(10, p.amp / 20) * p.vfs / 2;
+  const om = 2 * Math.PI * fbin * FS / N;
+  const os = [], sk = [], ac = [], ph = [], gc = [];
+  for (let c = 0; c < 3; c++) {
+    os.push(p.sOs * PAT[0][c]);
+    sk.push(p.sSkew * PAT[1][c]);
+    const tc = d.tau * (1 + p.sR * PAT[2][c]);
+    ac.push(1 / Math.sqrt(1 + (om * tc) ** 2));
+    ph.push(Math.atan(om * tc));
+    gc.push(p.g * (1 + d.sigCH * PAT[1][c]));
+  }
+  const a3 = p.hd3On ? 4 * Math.pow(10, p.hd3 / 20) / (A * A) : 0;
+  const L = N + 3, S = new Float64Array(3 * L), D = new Float64Array(N);
+  const kickPer = d.sKick * Math.sqrt(nd);
+  let esc = 0;
+  for (let n = 0; n < N; n++) {
+    const c = n % 3;
+    const t = n / FS + sk[c] + (p.jit ? p.jit * gn() : 0);
+    let x = ac[c] * A * Math.sin(om * t - ph[c] + 0.173);
+    if (a3) x -= a3 * x * x * x;
+    x += d.sSamp * gn();
+    const base = c * L + n, h0 = S[base], h1 = S[base + 1], h2 = S[base + 2];
+    let acc = 0, dsum = 0;
+    const row = wa[c];
+    for (let i = 0; i < nd; i++) {
+      const inj = M[3 * i] * h0 + M[3 * i + 1] * h1 + M[3 * i + 2] * h2;
+      const u = x - acc + inj + os[c] + p.sCmp * gn();
+      const b = u >= 0 ? 1 : -1;
+      acc += b * row[i] * lsb; dsum += b * w[i];
+    }
+    if (Math.abs(x - acc + M[3 * nd - 3] * h0 + M[3 * nd - 2] * h1 + M[3 * nd - 1] * h2 + os[c]) > lsb) esc++;
+    for (let k = 0; k < 3; k++) S[k * L + n + 3] = S[k * L + n + 2];
+    if (mode !== 'off') {
+      const v = x - acc + d.sFia * gn();
+      if (kickPer) S[c * L + n + 3] += kickPer * gn();
+      if (mode === 'own') {
+        const j = c * L + n + 3;
+        S[j] = p.lam * S[j] + gc[c] * v + d.sHold * gn();
+      } else {
+        for (let k = 0; k < 3; k++) {
+          const j = k * L + n + 3;
+          S[j] = p.lam * S[j] + gc[k] * v + d.sHold * gn();
+        }
+      }
+    }
+    D[n] = dsum * lsb;
+  }
+  D.esc = esc / N;
+  return D;
+}
+
+// ---- FFT ----
+const fftCache = {};
+function fftPower(x) {            // Hann window, returns |X|^2 for k=0..N/2
+  const N = x.length;
+  let cache = fftCache[N];
+  if (!cache) {
+    const rev = new Uint32Array(N), bits = Math.log2(N);
+    for (let i = 0; i < N; i++) { let r = 0, v = i; for (let b = 0; b < bits; b++) { r = (r << 1) | (v & 1); v >>= 1; } rev[i] = r; }
+    const cos = new Float64Array(N / 2), sin = new Float64Array(N / 2);
+    for (let i = 0; i < N / 2; i++) { cos[i] = Math.cos(2 * Math.PI * i / N); sin[i] = -Math.sin(2 * Math.PI * i / N); }
+    const win = new Float64Array(N);
+    for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+    cache = fftCache[N] = { rev, cos, sin, win };
+  }
+  let mean = 0; for (let i = 0; i < N; i++) mean += x[i]; mean /= N;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let i = 0; i < N; i++) re[cache.rev[i]] = (x[i] - mean) * cache.win[i];
+  for (let size = 2; size <= N; size <<= 1) {
+    const half = size >> 1, step = N / size;
+    for (let s = 0; s < N; s += size) {
+      for (let j = 0; j < half; j++) {
+        const wr = cache.cos[j * step], wi = cache.sin[j * step];
+        const a = s + j, b = a + half;
+        const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+      }
+    }
+  }
+  const P = new Float64Array(N / 2 + 1);
+  for (let k = 0; k <= N / 2; k++) P[k] = re[k] * re[k] + im[k] * im[k];
+  return P;
+}
+
+// 스펙트럼 지표
+function analyze(D, fbin, vfs) {
+  const N = D.length, P = fftPower(D);
+  const ref = Math.pow(N / 2 * (vfs / 2) / 2, 2);       // FS 사인 = 0 dBFS
+  const pr = new Float64Array(P.length);
+  for (let k = 0; k < P.length; k++) pr[k] = P[k] / ref;
+  const nb = Math.round(N / 8);
+  const sum = (a, b) => { let s = 0; for (let k = Math.max(0, a); k <= Math.min(pr.length - 1, b); k++) s += pr[k]; return s; };
+  const sig = sum(fbin - 3, fbin + 3);
+  const noise = sum(3, nb) - sig;
+  let spur = 0, spurK = 0;
+  for (let k = 3; k <= nb; k++) {
+    if (Math.abs(k - fbin) <= 3) continue;
+    if (pr[k] >= pr[k - 1] && pr[k] >= pr[k + 1]) { const s = sum(k - 2, k + 2); if (s > spur) { spur = s; spurK = k; } }
+  }
+  const kO = Math.round(N / 3);
+  const offSpur = sum(kO - 4, kO + 4);
+  const img = Math.max(sum(Math.round(N / 3 - fbin) - 4, Math.round(N / 3 - fbin) + 4), sum(Math.round(N / 3 + fbin) - 4, Math.round(N / 3 + fbin) + 4));
+  const floor9 = (sum(kO - 80, kO - 20) + sum(kO + 20, kO + 80)) / 122 * 9;
+  return {
+    pr, N,
+    sndr: 10 * Math.log10(sig / noise),
+    sigdB: 10 * Math.log10(sig / 1.5),   // Hann ENBW 1.5 bin 보정
+    sfdr: 10 * Math.log10(sig / spur), spurF: spurK * FS / N,
+    offSpurdB: 10 * Math.log10(offSpur / 1.5), imgdB: 10 * Math.log10(img / 1.5), floor9dB: 10 * Math.log10(floor9 / 1.5)
+  };
+}
+
+// ---- 해석적 잡음 예산 (in-band, 전력) ----
+function inbandAvg(fn) {   // mean over f in [0, fs/8] of |H|^2
+  let s = 0; const M = 400;
+  for (let i = 0; i < M; i++) { const f = (i + 0.5) / M * 0.125; s += fn(2 * Math.PI * f); }
+  return s / M;
+}
+function noiseBudget(p, d) {
+  const lsb = p.vfs / 4096, OSRf = 0.25;
+  const q = (p.mode === 'own') ? 3 : 1;
+  const on = p.mode !== 'off';
+  const lam = on ? p.lam : 0, g = on ? p.g : 0;
+  const mag2 = (w, b0, b1) => { // |1 - b0 e^{-jqw}|^2 / |1 - b1 e^{-jqw}|^2
+    const cw = Math.cos(q * w);
+    return (1 - 2 * b0 * cw + b0 * b0) / (1 - 2 * b1 * cw + b1 * b1);
+  };
+  const Gntf = on ? inbandAvg(w => mag2(w, lam, lam - g)) : 1;
+  const Gst = on ? inbandAvg(w => mag2(w, 0, lam - g)) : 0;   // 상태 교란 전달 |z/(1-(λ-g)z)|^2
+  const A = Math.pow(10, p.amp / 20) * p.vfs / 2;
+  const rows = [
+    ['양자화 (Δ²/12, NTF)', lsb * lsb / 12 * OSRf * Gntf],
+    ['comparator 잡음 (NTF)', p.sCmp * p.sCmp * OSRf * Gntf],
+    ['샘플링 kT/C (Cs)', d.sSamp * d.sSamp * OSRf],
+    ['C_H kT/C (상태에 누적)', on ? d.sHold * d.sHold * OSRf * Gst : 0],
+    ['FIA 잡음 (g배, 상태)', on ? Math.pow(g * d.sFia, 2) * OSRf * Gst : 0],
+    ['kickback (Q/C_H, 상태)', on ? d.sKick * d.sKick * d.nd * OSRf * Gst : 0],
+  ];
+  return { rows, Gntf, Gst, Ps: A * A / 2, A };
+}
+
+// ---- 전력 모델 (가정) ----
+function powerModel(p, d, pw) {
+  const Vref = p.vfs / 2;
+  const alpha = { conv: 1.33, vcm: 0.17, mono: 0.25 }[pw.dac];
+  const dac = 2 * alpha * p.Cs * Vref * Vref * FS / pw.eta;
+  const boot = 2 * pw.kBoot * (p.swMode === 'scaled' ? p.Cs : 1e-12) * pw.vdd * pw.vdd * FS;
+  const ecmp = pw.eCmp * Math.pow(pw.sRef / p.sCmp, 2);
+  const cmp = d.nd * ecmp * FS;
+  const logic = d.nd * pw.eLogic * FS;
+  const fia = p.mode === 'off' ? 0 : 2 * p.g * d.CL * pw.nVT * pw.vdd * pw.kF * FS;
+  const clk = pw.pClk;
+  const items = [['CDAC 스위칭', dac], ['샘플링 bootstrap', boot], ['Comparator', cmp], ['SAR 로직·DAC 드라이버', logic], ['FIA (loop filter)', fia], ['클럭 생성', clk]];
+  const total = items.reduce((a, b) => a + b[1], 0);
+  return { items, total, ecmp };
+}
+
+if (typeof module !== 'undefined') module.exports = { derive, simulate, analyze, noiseBudget, powerModel, W12, W14 };
+
+</script>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+// ---------- 조절 정의 ----------
+const fmtF = v => v >= 1e-12 ? (v * 1e12).toFixed(v >= 1e-11 ? 1 : 2) + ' pF' : (v * 1e15).toFixed(0) + ' fF';
+const P = {
+  Cs: 1e-12, CH: 0.5e-12, Acu: 0.55, vfs: 2, amp: -1,
+  sCmp: 244e-6, fiaAuto: true, gamma: 1, sFia: 100e-6, Cpar: 50e-15, qKick: 5e-18, jit: 0.2e-12,
+  g: 1, lam: 0.95, mode: 'bcast', nd: 12,
+  sOs: 0.3e-3, sSkew: 1e-12, tau0: 110e-12, swMode: 'scaled', sR: 0.02,
+  hd3On: false, hd3: -80, seed: 1, N: 16384, finSel: 0
+};
+const PW = { dac: 'vcm', eta: 0.3, kBoot: 0.25, vdd: 0.9, eCmp: 300e-15, sRef: 244e-6, eLogic: 200e-15, nVT: 0.034, kF: 3, pClk: 0.6e-3 };
+const DEF = JSON.parse(JSON.stringify({ P, PW }));
+const FINS = [{ label: '약 6 MHz', b: 251 }, { label: '약 20 MHz', b: 821 }, { label: '약 45 MHz', b: 1847 }];
+
+const groups = [
+  { title: '커패시터', items: [
+    { id: 'Cs', label: 'CDAC 샘플링 C (한쪽)', log: true, min: 0.1e-12, max: 5e-12, fmt: fmtF, hint: d => `unit ${ (d.Cu * 1e15).toFixed(3) } fF · 매칭 σ ${(d.sigU * 100).toFixed(2)}% · kT/C ${(d.sSamp * 1e6).toFixed(0)} µV` },
+    { id: 'CH', label: 'Hold cap C_H (채널당, 한쪽)', log: true, min: 0.03e-12, max: 3e-12, fmt: fmtF, hint: d => `kT/C ${(d.sHold * 1e6).toFixed(0)} µV · FIA 부하 ${fmtF(d.CL)} · kickback ${(d.sKick * 1e6).toFixed(1)} µV/판단` },
+    { id: 'Acu', label: 'Cap 매칭 계수 A_C', min: 0.1, max: 2, step: 0.05, fmt: v => v.toFixed(2) + ' %·√fF', hint: () => 'σ(ΔC/C) = A_C / √C[fF]' },
+  ]},
+  { title: '루프 구조', items: [
+    { id: 'mode', type: 'seg', opts: [['bcast', '3개 모두 누적'], ['own', '자기 cap만'], ['off', 'NS off']] },
+    { id: 'nd', type: 'seg', label: 'SAR 판단', opts: [[12, '12회 (458 ps)'], [14, '14회 중복 (393 ps)']] },
+    { id: 'g', label: 'FIA 갱신 gain g', min: 0, max: 1.5, step: 0.05, fmt: v => v.toFixed(2) },
+    { id: 'lam', label: 'C_H 유지율 λ (누설)', min: 0.7, max: 1, step: 0.01, fmt: v => v.toFixed(2), hint: () => 'NTF = (1−λz⁻¹)/(1−(λ−g)z⁻¹)' },
+  ]},
+  { title: '채널 mismatch (TI spur)', items: [
+    { id: 'sOs', label: 'Comparator offset σ', min: 0, max: 5e-3, step: 0.1e-3, fmt: v => (v * 1e3).toFixed(1) + ' mV', hint: () => '루프 안이라 fs/3에서 NTF만큼 증폭, 12회 판단에서 1 mV면 overload' },
+    { id: 'sSkew', label: '클럭 skew σ', min: 0, max: 10e-12, step: 0.1e-12, fmt: v => (v * 1e12).toFixed(1) + ' ps' },
+    { id: 'sR', label: '샘플링 스위치 R 편차 σ', min: 0, max: 0.1, step: 0.005, fmt: v => (v * 100).toFixed(1) + ' %', hint: d => `τ = R·Cs = ${(d.tau * 1e12).toFixed(0)} ps → skew 환산 ≈ ${(d.tau * P.sR * 1e12).toFixed(2)} ps` },
+    { id: 'swMode', type: 'seg', label: '샘플링 스위치', opts: [['scaled', 'Cs에 맞춰 크기 조정'], ['fixed', '크기 고정 (1 pF 기준)']] },
+  ]},
+  { title: '잡음', items: [
+    { id: 'sCmp', label: 'Comparator 잡음 σ', min: 60e-6, max: 600e-6, step: 2e-6, fmt: v => (v * 1e6).toFixed(0) + ' µV', hint: () => '작을수록 comparator 에너지 ∝ 1/σ² 증가' },
+    { id: 'fiaAuto', type: 'check', label: 'FIA 잡음을 C_H에서 계산 (2kTγ/(g·C_L))' },
+    { id: 'sFia', label: 'FIA 잡음 (직접 지정)', min: 0, max: 300e-6, step: 5e-6, fmt: v => (v * 1e6).toFixed(0) + ' µV', dep: () => !P.fiaAuto },
+    { id: 'qKick', label: 'Kickback 전하 σ', min: 0, max: 30e-18, step: 1e-18, fmt: v => (v * 1e18).toFixed(0) + ' aC', hint: () => 'C_H 전압 = Q / C_H, 상태에 누적' },
+    { id: 'jit', label: 'Aperture jitter', min: 0, max: 2e-12, step: 0.05e-12, fmt: v => (v * 1e12).toFixed(2) + ' ps' },
+    { id: 'hd3On', type: 'check', label: '입력 HD3 −80 dBc 포함' },
+  ]},
+  { title: '신호·시뮬레이션', items: [
+    { id: 'vfs', type: 'seg', label: '풀스케일 (차동 p-p)', opts: [[2, '2 Vpp'], [1, '1 Vpp']] },
+    { id: 'finSel', type: 'seg', label: '입력 주파수', opts: FINS.map((f, i) => [i, f.label]) },
+    { id: 'N', type: 'seg', label: 'FFT 길이', opts: [[8192, '8192'], [16384, '16384'], [32768, '32768']] },
+    { id: 'seed', label: 'mismatch·잡음 seed', min: 1, max: 20, step: 1, fmt: v => String(v) },
+  ]},
+];
+const pwGroup = { title: '전력 가정', items: [
+  { id: 'dac', type: 'seg', pw: true, label: 'CDAC 스위칭 방식', opts: [['vcm', 'Vcm 기반 α 0.17'], ['mono', 'Monotonic 0.25'], ['conv', '기존 1.33']] },
+  { id: 'eta', pw: true, label: '기준전압 효율 η', min: 0.1, max: 1, step: 0.05, fmt: v => v.toFixed(2) },
+  { id: 'eCmp', pw: true, label: 'Comparator 에너지 (σ 244 µV 기준)', min: 50e-15, max: 800e-15, step: 10e-15, fmt: v => (v * 1e15).toFixed(0) + ' fJ/판단' },
+  { id: 'eLogic', pw: true, label: 'SAR 로직·드라이버', min: 20e-15, max: 500e-15, step: 10e-15, fmt: v => (v * 1e15).toFixed(0) + ' fJ/판단' },
+  { id: 'kBoot', pw: true, label: 'Bootstrap 계수 k', min: 0.05, max: 1, step: 0.05, fmt: v => v.toFixed(2) + ' ·Cs·VDD²' },
+  { id: 'kF', pw: true, label: 'FIA 오버헤드 k', min: 1, max: 8, step: 0.5, fmt: v => v.toFixed(1) },
+  { id: 'pClk', pw: true, label: '클럭 생성 (고정)', min: 0, max: 2e-3, step: 0.05e-3, fmt: v => (v * 1e3).toFixed(2) + ' mW' },
+  { id: 'vdd', pw: true, label: 'VDD', min: 0.7, max: 1.2, step: 0.05, fmt: v => v.toFixed(2) + ' V' },
+]};
+
+// ---------- 조절 UI 생성 ----------
+const aside = $('controls');
+const ctlRefs = {};
+function buildCtl(it, parent) {
+  const obj = it.pw ? PW : P;
+  const wrap = document.createElement('div'); wrap.className = 'ctl';
+  if (it.type === 'seg') {
+    if (it.label) { const l = document.createElement('label'); l.textContent = it.label; wrap.appendChild(l); }
+    const seg = document.createElement('div'); seg.className = 'seg'; seg.setAttribute('role', 'group'); seg.id = 'seg-' + it.id;
+    it.opts.forEach(([val, txt]) => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; b.id = `seg-${it.id}-${val}`;
+      b.addEventListener('click', () => { obj[it.id] = val; sync(); schedule(); });
+      seg.appendChild(b);
+    });
+    wrap.appendChild(seg);
+    ctlRefs[it.id] = { it, seg };
+  } else if (it.type === 'check') {
+    const l = document.createElement('label'); l.className = 'check';
+    const c = document.createElement('input'); c.type = 'checkbox'; c.id = 'chk-' + it.id;
+    c.addEventListener('change', () => { obj[it.id] = c.checked; sync(); schedule(); });
+    l.appendChild(c); l.appendChild(document.createTextNode(it.label)); wrap.appendChild(l);
+    ctlRefs[it.id] = { it, c };
+  } else {
+    const row = document.createElement('div'); row.className = 'row';
+    const l = document.createElement('label'); l.textContent = it.label; l.htmlFor = 'rng-' + it.id;
+    const o = document.createElement('output'); row.appendChild(l); row.appendChild(o);
+    const r = document.createElement('input'); r.type = 'range'; r.id = 'rng-' + it.id;
+    if (it.log) { r.min = Math.log10(it.min); r.max = Math.log10(it.max); r.step = 0.01; }
+    else { r.min = it.min; r.max = it.max; r.step = it.step; }
+    r.addEventListener('input', () => { obj[it.id] = it.log ? Math.pow(10, +r.value) : +r.value; sync(); schedule(); });
+    wrap.appendChild(row); wrap.appendChild(r);
+    const h = document.createElement('div'); h.className = 'hint'; wrap.appendChild(h);
+    ctlRefs[it.id] = { it, r, o, h, wrap };
+  }
+  parent.appendChild(wrap);
+}
+groups.forEach((g, gi) => {
+  const sec = document.createElement('section'); sec.className = 'group';
+  const h = document.createElement('h2'); h.textContent = g.title; sec.appendChild(h);
+  g.items.forEach(it => buildCtl(it, sec)); aside.appendChild(sec);
+});
+{
+  const det = document.createElement('details'); det.className = 'group'; det.id = 'pwDetails';
+  const s = document.createElement('summary'); s.textContent = pwGroup.title; det.appendChild(s);
+  pwGroup.items.forEach(it => buildCtl(it, det)); aside.appendChild(det);
+  const br = document.createElement('div'); br.className = 'btnrow';
+  const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'btn'; reset.textContent = '기본값으로';
+  reset.addEventListener('click', () => { Object.assign(P, JSON.parse(JSON.stringify(DEF.P))); Object.assign(PW, JSON.parse(JSON.stringify(DEF.PW))); sync(); schedule(); });
+  br.appendChild(reset); aside.appendChild(br);
+}
+
+function sync() {
+  const d = derive(P);
+  for (const id in ctlRefs) {
+    const { it, r, o, h, seg, c, wrap } = ctlRefs[id];
+    const obj = it.pw ? PW : P;
+    if (seg) [...seg.children].forEach((b, i) => b.setAttribute('aria-pressed', String(it.opts[i][0] === obj[id])));
+    else if (c) c.checked = !!obj[id];
+    else {
+      r.value = it.log ? Math.log10(obj[id]) : obj[id];
+      o.textContent = it.fmt(obj[id]);
+      h.textContent = it.hint ? it.hint(d) : '';
+      h.hidden = !it.hint;
+      if (it.dep) wrap.hidden = !it.dep();
+    }
+  }
+}
+
+// ---------- 색상 ----------
+const css = () => getComputedStyle(document.documentElement);
+const col = n => css().getPropertyValue('--' + n).trim();
+
+// ---------- 캔버스 공통 ----------
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = +cv.getAttribute('height');
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px';
+  }
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+// ---------- FFT 차트 ----------
+let axisLog = false, view = 'band', yZoom = true, showRaw = false;
+let traces = { cur: null, off: null, pin: null };
+function mkTrace(res, color, label) { return { pr: res.pr, N: res.N, color, label, res }; }
+function viewRange() {
+  if (view === 'fs3') return { f0: 105e6, f1: 162e6, log: false };
+  const f1 = view === 'band' ? 50e6 : 200e6;
+  return axisLog ? { f0: 0.5e6, f1, log: true } : { f0: 0, f1, log: false };
+}
+function smoothView(pr, N, vr) {   // 보이는 구간에 맞춘 평균 폭
+  const n = pr.length, cs = new Float64Array(n + 1);
+  for (let k = 0; k < n; k++) cs[k + 1] = cs[k] + pr[k];
+  const binsPerPx = (vr.f1 - vr.f0) / (FS / N) / 700;
+  const fixedH = view === 'fs3' ? 1 : Math.max(2, Math.round(binsPerPx * 4));
+  const out = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    const h = vr.log ? Math.max(1, Math.round(k * 0.03)) : fixedH;
+    const a = Math.max(1, k - h), b = Math.min(n - 1, k + h);
+    out[k] = (cs[b + 1] - cs[a]) / (b - a + 1);
+  }
+  return out;
+}
+function inbandMean(tr) {   // 대역 내 평균 잡음 (bin당, 신호 제외)
+  const nb = Math.round(tr.N / 8), fb = Math.round(tr.res.fin / (FS / tr.N));
+  let s = 0, c = 0;
+  for (let k = 3; k <= nb; k++) { if (Math.abs(k - fb) <= 3) continue; s += tr.pr[k]; c++; }
+  return 10 * Math.log10(s / c);
+}
+let fftGeom = null;
+function drawFFT() {
+  const cv = $('fft'); const { ctx, w, h } = setupCanvas(cv);
+  const m = { l: 48, r: 16, t: 22, b: 30 };
+  const pw = w - m.l - m.r, ph = h - m.t - m.b;
+  const vr = viewRange();
+  const lf0 = Math.log10(vr.f0 || 1), lf1 = Math.log10(vr.f1);
+  const fx = f => vr.log ? m.l + (Math.log10(Math.max(f, vr.f0)) - lf0) / (lf1 - lf0) * pw : m.l + (f - vr.f0) / (vr.f1 - vr.f0) * pw;
+  const xf = x => vr.log ? Math.pow(10, lf0 + (x - m.l) / pw * (lf1 - lf0)) : vr.f0 + (x - m.l) / pw * (vr.f1 - vr.f0);
+  const keys = ['off', 'pin', 'cur'].filter(k => traces[k]);
+  const sms = {}; keys.forEach(k => { sms[k] = smoothView(traces[k].pr, traces[k].N, vr); });
+  // 세로축 범위
+  let YMIN = -160, YMAX = 5;
+  if (yZoom) {
+    let lo = Infinity, hi = -Infinity;
+    keys.forEach(k => {
+      const tr = traces[k], df = FS / tr.N, sm = sms[k], fin = tr.res.fin;
+      for (let x = m.l; x <= m.l + pw; x += 2) {
+        const f = xf(x); if (Math.abs(f - fin) < Math.max(32 * df, (vr.f1 - vr.f0) * 0.02)) continue;
+        const kk = Math.round(f / df); if (kk < 3 || kk >= sm.length) continue;
+        const v = 10 * Math.log10(sm[kk]); if (v < lo) lo = v; if (v > hi) hi = v;
+      }
+    });
+    if (Number.isFinite(lo)) {
+      YMIN = Math.floor((lo - 6) / 10) * 10; YMAX = Math.min(5, Math.ceil((hi + 8) / 10) * 10);
+      if (YMAX - YMIN < 40) YMIN = YMAX - 40;
+    }
+  }
+  const fy = v => m.t + (YMAX - v) / (YMAX - YMIN) * ph;
+  fftGeom = { m, pw, ph, fx, fy, xf, w, h, sms, vr };
+  ctx.clearRect(0, 0, w, h);
+  const mono = col('f-mono');
+  ctx.font = '11px ' + mono;
+  // 대역 음영
+  if (vr.f0 < 50e6) { ctx.fillStyle = col('band'); ctx.fillRect(fx(vr.f0), m.t, fx(Math.min(50e6, vr.f1)) - fx(vr.f0), ph); }
+  // grid
+  ctx.strokeStyle = col('grid'); ctx.lineWidth = 1; ctx.fillStyle = col('ink-3'); ctx.textBaseline = 'middle';
+  const ys = (YMAX - YMIN) > 80 ? 20 : 10;
+  for (let v = Math.ceil(YMIN / ys) * ys; v <= YMAX; v += ys) {
+    const y = Math.round(fy(v)) + 0.5; ctx.beginPath(); ctx.moveTo(m.l, y); ctx.lineTo(m.l + pw, y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(String(v), m.l - 6, y);
+  }
+  let xt;
+  if (vr.log) xt = [0.5e6, 1e6, 2e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6].filter(f => f >= vr.f0 && f <= vr.f1);
+  else if (view === 'band') xt = [0, 10e6, 20e6, 30e6, 40e6, 50e6];
+  else if (view === 'fs3') xt = [110e6, 120e6, 130e6, 140e6, 150e6, 160e6];
+  else xt = [0, 25e6, 50e6, 75e6, 100e6, 125e6, 150e6, 175e6, 200e6];
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  xt.forEach(f => { const x = Math.round(fx(f)) + 0.5; ctx.beginPath(); ctx.moveTo(x, m.t); ctx.lineTo(x, m.t + ph); ctx.stroke(); ctx.fillText((f / 1e6).toString(), x, m.t + ph + 6); });
+  ctx.textAlign = 'right'; ctx.fillText('MHz', m.l + pw, m.t + ph + 18);
+  ctx.save(); ctx.translate(12, m.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('dBFS', 0, 0); ctx.restore();
+  // 기준선
+  ctx.setLineDash([3, 3]); ctx.strokeStyle = col('ink-3'); ctx.fillStyle = col('ink-2'); ctx.textBaseline = 'bottom';
+  const vline = (f, t) => { if (f <= vr.f0 || f >= vr.f1) return; const x = Math.round(fx(f)) + 0.5; ctx.beginPath(); ctx.moveTo(x, m.t); ctx.lineTo(x, m.t + ph); ctx.stroke(); ctx.textAlign = 'center'; ctx.fillText(t, x, m.t - 4); };
+  vline(50e6, 'BW 50 MHz'); vline(FS / 3, 'fs/3');
+  ctx.setLineDash([]);
+  ctx.save(); ctx.beginPath(); ctx.rect(m.l, m.t, pw, ph); ctx.clip();
+  keys.forEach(key => {
+    const tr = traces[key], df = FS / tr.N, sm = sms[key];
+    if (showRaw && key === 'cur') {
+      ctx.strokeStyle = tr.color; ctx.globalAlpha = 0.2; ctx.lineWidth = 1;
+      for (let x = Math.floor(m.l); x < m.l + pw; x++) {
+        let k0 = Math.ceil(xf(x) / df), k1 = Math.floor(xf(x + 1) / df);
+        if (k1 < k0) { k0 = k1 = Math.round(xf(x + 0.5) / df); }
+        k0 = Math.max(1, k0); k1 = Math.min(tr.pr.length - 1, k1); if (k1 < k0) continue;
+        let lo = Infinity, hi = -Infinity;
+        for (let k = k0; k <= k1; k++) { const v = tr.pr[k]; if (v < lo) lo = v; if (v > hi) hi = v; }
+        const y0 = fy(10 * Math.log10(hi + 1e-30)), y1 = fy(10 * Math.log10(lo + 1e-30));
+        ctx.beginPath(); ctx.moveTo(x + 0.5, y0); ctx.lineTo(x + 0.5, Math.max(y1, y0 + 1)); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = tr.color; ctx.lineWidth = key === 'cur' ? 2 : 1.6; ctx.lineJoin = 'round'; ctx.beginPath();
+    let started = false;
+    for (let x = Math.floor(m.l); x <= m.l + pw; x++) {
+      const k = Math.round(xf(x) / df); if (k < 1 || k >= sm.length) continue;
+      const y = fy(10 * Math.log10(sm[k] + 1e-30));
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  });
+  ctx.restore();
+  // 대역 내 평균 잡음 점선 + 라벨
+  ctx.font = '11px ' + mono;
+  const means = {};
+  if (vr.f0 < 50e6) {
+    const xa = fx(vr.f0), xb = fx(Math.min(50e6, vr.f1));
+    const labs = [];
+    keys.forEach(k => {
+      const mv = inbandMean(traces[k]); means[k] = mv; if (mv < YMIN || mv > YMAX) return;
+      const y = Math.round(fy(mv)) + 0.5;
+      ctx.strokeStyle = traces[k].color; ctx.lineWidth = 1.2; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(xb, y); ctx.stroke(); ctx.setLineDash([]);
+      labs.push({ y, t: `평균 ${mv.toFixed(1)}`, c: traces[k].color });
+    });
+    labs.sort((p, q) => p.y - q.y);
+    for (let i = 1; i < labs.length; i++) if (labs[i].y - labs[i - 1].y < 14) labs[i].y = labs[i - 1].y + 14;
+    labs.forEach(L => {
+      const tw = ctx.measureText(L.t).width + 8, x0 = Math.min(xb, m.l + pw) - tw - 4;
+      ctx.fillStyle = col('panel'); ctx.globalAlpha = 0.85; ctx.fillRect(x0, L.y - 8, tw, 15); ctx.globalAlpha = 1;
+      ctx.fillStyle = L.c; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(L.t, x0 + 4, L.y);
+    });
+  }
+  const hd = $('fftHead');
+  if (means.cur !== undefined && means.off !== undefined) {
+    const gain = means.off - means.cur;
+    hd.innerHTML = `대역 내 평균 잡음이 NS off보다 <b>${Math.abs(gain).toFixed(1)} dB ${gain >= 0 ? '낮음' : '높음'}</b> <span>(${means.off.toFixed(1)} → ${means.cur.toFixed(1)} dBFS/bin)</span>`;
+  } else hd.innerHTML = vr.f0 < 50e6 ? '' : '<span>대역 밖 구간입니다. 라벨 값은 spur 전력(±4 bin 합, Hann 보정)입니다.</span>';
+  if (traces.cur) {
+    // 신호 (확대 시 화살표)
+    const r = traces.cur.res, fin = r.fin;
+    if (fin > vr.f0 && fin < vr.f1 && r.sigdB > YMAX) {
+      const x = fx(fin);
+      ctx.font = '11px ' + mono; ctx.fillStyle = col('ink-2');
+      ctx.beginPath(); ctx.moveTo(x, m.t + 2); ctx.lineTo(x - 5, m.t + 10); ctx.lineTo(x + 5, m.t + 10); ctx.closePath(); ctx.fill();
+      const right = x > m.l + pw - 170;
+      ctx.textAlign = right ? 'right' : 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(`신호 ${r.sigdB.toFixed(1)} dBFS · ${(fin / 1e6).toFixed(2)} MHz`, x + (right ? -8 : 8), m.t + 2);
+    }
+    // spur 라벨
+    const tag = (f, v, t) => {
+      if (f <= vr.f0 || f >= vr.f1 || v < YMIN) return;
+      const tr = traces.cur, sm = sms.cur, df = FS / tr.N, k0 = Math.round(f / df);
+      let pk = 0; for (let k = k0 - 4; k <= k0 + 4; k++) if (k > 0 && k < sm.length && sm[k] > pk) pk = sm[k];
+      const x = fx(f), y = fy(Math.min(10 * Math.log10(pk), YMAX - 2));
+      ctx.fillStyle = col('s1'); ctx.strokeStyle = col('panel'); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = col('ink'); ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.font = '11px ' + mono;
+      ctx.fillText(`${t} ${v.toFixed(0)} dBFS`, Math.min(Math.max(x, m.l + 60), m.l + pw - 60), y - 7);
+    };
+    if (view !== 'band') {
+      tag(FS / 3, r.offSpurdB, 'offset');
+      if (view === 'fs3') tag(FS / 3 + r.fin, r.imgdB, 'image');
+    }
+  }
+  // legend
+  const L = [];
+  if (traces.cur) L.push(`<span><i style="background:${traces.cur.color}"></i>현재 설정 · SNDR ${traces.cur.res.sndr.toFixed(1)} dB</span>`);
+  if (traces.off) L.push(`<span><i style="background:${traces.off.color}"></i>같은 조건 NS off · SNDR ${traces.off.res.sndr.toFixed(1)} dB</span>`);
+  if (traces.pin) L.push(`<span><i style="background:${traces.pin.color}"></i>고정한 결과 (${traces.pin.tag}) · SNDR ${traces.pin.res.sndr.toFixed(1)} dB</span>`);
+  $('fftLegend').innerHTML = L.join('');
+}
+// hover
+function attachTip(boxId, cvId, fn) {
+  const box = $(boxId), cv = $(cvId);
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.hidden = true; box.appendChild(tip);
+  cv.addEventListener('mousemove', e => {
+    const r = cv.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
+    const html = fn(x, y);
+    if (!html) { tip.hidden = true; return; }
+    tip.innerHTML = html; tip.hidden = false;
+    const tw = tip.offsetWidth; tip.style.left = Math.min(Math.max(0, x + 14), r.width - tw) + 'px'; tip.style.top = Math.max(0, y - 10) + 'px';
+  });
+  cv.addEventListener('mouseleave', () => { tip.hidden = true; });
+}
+attachTip('fftBox', 'fft', (x) => {
+  const g = fftGeom; if (!g || x < g.m.l || x > g.m.l + g.pw) return null;
+  const f = g.xf(x); let s = `${(f / 1e6).toFixed(2)} MHz`;
+  ['cur', 'off', 'pin'].forEach(k => {
+    const tr = traces[k]; if (!tr) return;
+    const kk = Math.round(f / (FS / tr.N)); if (kk < 1 || kk >= tr.pr.length) return;
+    const sm = g.sms[k]; if (!sm) return;
+    s += `<br><span class="sw" style="background:${tr.color}"></span>${(10 * Math.log10(sm[kk])).toFixed(1)} dBFS (bin ${(10 * Math.log10(tr.pr[kk] + 1e-30)).toFixed(1)})`;
+  });
+  return s;
+});
+
+// ---------- XY 스윕 차트 ----------
+const swGeom = {};
+function drawXY(id, xs, ys, opt) {
+  const cv = $(id); const { ctx, w, h } = setupCanvas(cv);
+  const m = { l: 46, r: 12, t: 10, b: 30 }, pw = w - m.l - m.r, ph = h - m.t - m.b;
+  const vals = ys.filter(Number.isFinite).concat(opt.refs ? opt.refs.map(r => r[1]) : []).concat(Number.isFinite(opt.cur[1]) ? [opt.cur[1]] : []);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = Math.max((hi - lo) * 0.12, opt.minSpan || 1); lo -= pad; hi += pad;
+  const step = niceStep((hi - lo) / 4); lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const lx0 = Math.log10(xs[0]), lx1 = Math.log10(xs[xs.length - 1]);
+  const fx = v => m.l + (Math.log10(v) - lx0) / (lx1 - lx0) * pw, fy = v => m.t + (hi - v) / (hi - lo) * ph;
+  swGeom[id] = { xs, ys, fx, fy, m, pw, ph, fmt: opt.fmt };
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = '11px ' + col('f-mono'); ctx.strokeStyle = col('grid'); ctx.fillStyle = col('ink-3'); ctx.lineWidth = 1;
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let v = lo; v <= hi + 1e-9; v += step) { const y = Math.round(fy(v)) + 0.5; ctx.beginPath(); ctx.moveTo(m.l, y); ctx.lineTo(m.l + pw, y); ctx.stroke(); ctx.fillText(opt.tick ? opt.tick(v) : v.toFixed(0), m.l - 5, y); }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  opt.xticks.forEach(t => { const x = Math.round(fx(t)) + 0.5; ctx.beginPath(); ctx.moveTo(x, m.t); ctx.lineTo(x, m.t + ph); ctx.stroke(); ctx.fillText(fmtF(t).replace(' ', ''), x, m.t + ph + 6); });
+  if (opt.refs) {
+    ctx.setLineDash([4, 3]); ctx.strokeStyle = col('ink-3'); ctx.fillStyle = col('ink-3'); ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    opt.refs.forEach(([name, v]) => { const y = Math.round(fy(v)) + 0.5; ctx.beginPath(); ctx.moveTo(m.l, y); ctx.lineTo(m.l + pw, y); ctx.stroke(); ctx.fillText(name, m.l + 4, y - 1); });
+    ctx.setLineDash([]);
+  }
+  ctx.strokeStyle = col('s1'); ctx.lineWidth = 2; ctx.beginPath();
+  xs.forEach((x, i) => { if (!Number.isFinite(ys[i])) return; i ? ctx.lineTo(fx(x), fy(ys[i])) : ctx.moveTo(fx(x), fy(ys[i])); }); ctx.stroke();
+  ctx.fillStyle = col('s1');
+  xs.forEach((x, i) => { if (!Number.isFinite(ys[i])) return; ctx.beginPath(); ctx.arc(fx(x), fy(ys[i]), 2.5, 0, 7); ctx.fill(); });
+  if (Number.isFinite(opt.cur[1])) {
+    ctx.strokeStyle = col('panel'); ctx.lineWidth = 2; ctx.fillStyle = col('s2');
+    ctx.beginPath(); ctx.arc(fx(opt.cur[0]), fy(opt.cur[1]), 5.5, 0, 7); ctx.fill(); ctx.stroke();
+  }
+}
+function niceStep(s) { const p = Math.pow(10, Math.floor(Math.log10(s))), r = s / p; return (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * p; }
+['sw1', 'sw2', 'sw3'].forEach(id => attachTip(id + 'Box', id, (x) => {
+  const g = swGeom[id]; if (!g) return null;
+  let best = -1, bd = 1e9; g.xs.forEach((v, i) => { const dd = Math.abs(g.fx(v) - x); if (dd < bd) { bd = dd; best = i; } });
+  if (best < 0 || bd > 30) return null;
+  return `${fmtF(g.xs[best])}<br>${g.fmt(g.ys[best])}`;
+}));
+
+// ---------- 계산 & 렌더 ----------
+let timer = null, sweepTimer = null, sweepVar = 'Cs', lastSweep = null;
+function schedule() { $('busy').textContent = '계산 중…'; clearTimeout(timer); timer = setTimeout(runMain, 60); clearTimeout(sweepTimer); sweepTimer = setTimeout(runSweep, 450); }
+const fmtdB = v => Number.isFinite(v) ? v.toFixed(1) : '—';
+let lastMain = null;
+function runMain() {
+  const t0 = performance.now();
+  const d = derive(P), fb = Math.round(FINS[P.finSel].b * P.N / 16384) | 1;
+  const fbin = isPrimeish(fb) ? fb : nextOdd(fb);
+  const D = simulate(P, d, P.N, fbin);
+  const res = analyze(D, fbin, P.vfs);
+  const resOff = P.mode === 'off' ? null : analyze(simulate(P, d, P.N, fbin, 'off'), fbin, P.vfs);
+  const pwr = powerModel(P, d, PW);
+  const nb = noiseBudget(P, d);
+  lastMain = { d, res, resOff, pwr, nb, fbin, esc: D.esc };
+  res.fin = fbin * FS / P.N; if (resOff) resOff.fin = res.fin;
+  traces.cur = mkTrace(res, col('s1'), '현재');
+  traces.off = resOff ? mkTrace(resOff, col('ref'), 'NS off') : null;
+  if (traces.pin) traces.pin.color = col('s2');
+  drawFFT(); renderTiles(); renderPower(); renderBudget();
+  $('busy').textContent = `${(performance.now() - t0).toFixed(0)} ms`;
+  if (lastSweep) drawSweeps();
+}
+function isPrimeish(n) { for (let i = 3; i * i <= n; i += 2) if (n % i === 0) return false; return n % 2 === 1; }
+function nextOdd(n) { n |= 1; while (!isPrimeish(n)) n += 2; return n; }
+
+function renderTiles() {
+  const { d, res, resOff, pwr, esc } = lastMain;
+  const fom = res.sndr + 10 * Math.log10(50e6 / pwr.total);
+  const tile = (k, v, u, dtxt) => `<div class="tile"><span class="k">${k}</span><span class="v">${v}<small>${u}</small></span><span class="d">${dtxt}</span></div>`;
+  $('tiles').innerHTML = [
+    tile('SNDR (0~50 MHz)', fmtdB(res.sndr), 'dB', resOff ? `NS off 대비 ${(res.sndr - resOff.sndr >= 0 ? '+' : '')}${(res.sndr - resOff.sndr).toFixed(1)} dB` : 'NS off 상태'),
+    tile('대역 내 SFDR', fmtdB(res.sfdr), 'dBc', `최대 성분 ${(res.spurF / 1e6).toFixed(1)} MHz`),
+    tile('fs/3 offset spur', fmtdB(res.offSpurdB), 'dBFS', `대역 밖 · 주변 바닥 ${fmtdB(res.floor9dB)}`),
+    tile('fs/3 ± fin image', fmtdB(res.imgdB), 'dBFS', 'gain·skew·대역폭 mismatch'),
+    tile('전력 추정', (pwr.total * 1e3).toFixed(2), 'mW', `comparator ${(pwr.ecmp * 1e15).toFixed(0)} fJ/판단`),
+    tile('FoMs', fmtdB(fom), 'dB', 'Zhao 173.1 · Lin 171.3 · Jie 166.3'),
+  ].join('');
+  const pills = [];
+  const sr = d.settleRatio, need = Math.log(Math.pow(2, 13));
+  pills.push(sr >= need ? `<span class="pill good"><b>✓</b>샘플링 settling 여유 ${(sr / need).toFixed(2)}× (τ ${(d.tau * 1e12).toFixed(0)} ps)</span>` : `<span class="pill bad"><b>!</b>샘플링 settling 부족: 1 ns / τ = ${sr.toFixed(1)} &lt; ${need.toFixed(1)} 필요</span>`);
+  const escPct = esc * 100;
+  pills.push(escPct < 10 ? `<span class="pill good"><b>✓</b>최종 잔차 &gt;1 LSB ${escPct.toFixed(1)}% (comparator 잡음 포함)</span>` : escPct < 20 ? `<span class="pill warn"><b>!</b>최종 잔차 &gt;1 LSB ${escPct.toFixed(1)}% — 중복 판단이나 offset 보정 검토</span>` : `<span class="pill bad"><b>!</b>최종 잔차 &gt;1 LSB ${escPct.toFixed(1)}% — overload, 중복 판단 필요</span>`);
+  pills.push(`<span class="pill ${d.tbit / 2 >= 0.2e-9 ? 'good' : 'warn'}"><b>${d.tbit / 2 >= 0.2e-9 ? '✓' : '!'}</b>comparator 판단 시간 ≈ ${(d.tbit / 2 * 1e12).toFixed(0)} ps</span>`);
+  if (P.mode === 'own') pills.push(`<span class="pill bad"><b>!</b>자기 cap만 누적: NTF가 z⁻³ 함수라 대역 내 잡음이 늘어남</span>`);
+  $('status').innerHTML = pills.join('');
+}
+function renderPower() {
+  const { pwr } = lastMain; const cols = ['s1', 's2', 's3', 's4', 's5', 's6'];
+  $('pwStack').innerHTML = pwr.items.map((it, i) => it[1] > 0 ? `<div style="width:${(it[1] / pwr.total * 100).toFixed(2)}%;background:${col(cols[i])}" title="${it[0]}"></div>` : '').join('');
+  $('pwTable').innerHTML = '<tr><th>항목</th><th class="n">mW</th><th class="n">비율</th></tr>' + pwr.items.map((it, i) =>
+    `<tr><td><span class="swatch" style="background:${col(cols[i])}"></span>${it[0]}</td><td class="n">${(it[1] * 1e3).toFixed(3)}</td><td class="n">${(it[1] / pwr.total * 100).toFixed(0)}%</td></tr>`).join('') +
+    `<tr><td><b>합계</b></td><td class="n"><b>${(pwr.total * 1e3).toFixed(2)}</b></td><td class="n">100%</td></tr>`;
+  $('pwTotal').textContent = `${(pwr.total * 1e3).toFixed(2)} mW`;
+}
+function renderBudget() {
+  const { nb, res, fbin } = lastMain;
+  const fin = fbin * FS / P.N;
+  const rows = nb.rows.concat([['aperture jitter', Math.pow(nb.A * 2 * Math.PI * fin * P.jit, 2) / 2 * 0.25]]);
+  const tot = rows.reduce((a, r) => a + r[1], 0);
+  const refFS = Math.pow(P.vfs / 2, 2) / 2;
+  const maxv = Math.max(...rows.map(r => r[1]));
+  $('nbTable').innerHTML = '<tr><th>잡음원</th><th class="n">dBFS</th><th class="n">비율</th><th class="bar-cell"></th></tr>' + rows.map(r =>
+    `<tr><td>${r[0]}</td><td class="n">${r[1] > 0 ? (10 * Math.log10(r[1] / refFS)).toFixed(1) : '—'}</td><td class="n">${(r[1] / tot * 100).toFixed(0)}%</td><td class="bar-cell"><div class="minibar" style="width:${(r[1] / maxv * 100).toFixed(1)}%"></div></td></tr>`).join('');
+  const sndrA = 10 * Math.log10(nb.Ps / tot);
+  $('nbTotal').textContent = `해석 ${sndrA.toFixed(1)} dB · 시뮬 ${res.sndr.toFixed(1)} dB`;
+}
+
+// ---------- 스윕 ----------
+function runSweep() {
+  $('swBusy').textContent = '스윕 계산 중…';
+  setTimeout(() => {
+    const t0 = performance.now();
+    const xs = sweepVar === 'Cs' ? logspace(0.15e-12, 5e-12, 11) : logspace(0.05e-12, 3e-12, 11);
+    const N = 4096, fb = 61;
+    const out = xs.map(x => {
+      const p = Object.assign({}, P, { [sweepVar]: x });
+      const d = derive(p);
+      const r = analyze(simulate(p, d, N, fb), fb, p.vfs);
+      const pw = powerModel(p, d, PW).total;
+      return { x, sndr: r.sndr, pw, fom: r.sndr + 10 * Math.log10(50e6 / pw), off: r.offSpurdB };
+    });
+    lastSweep = { xs, out, v: sweepVar };
+    drawSweeps();
+    $('swBusy').textContent = `${(performance.now() - t0).toFixed(0)} ms`;
+  }, 10);
+}
+function logspace(a, b, n) { const r = []; for (let i = 0; i < n; i++) r.push(Math.pow(10, Math.log10(a) + (Math.log10(b) - Math.log10(a)) * i / (n - 1))); return r; }
+function drawSweeps() {
+  if (!lastSweep || !lastMain) return;
+  const { xs, out, v } = lastSweep;
+  const cur = P[v];
+  const xt = v === 'Cs' ? [0.2e-12, 0.5e-12, 1e-12, 2e-12, 5e-12] : [0.05e-12, 0.1e-12, 0.2e-12, 0.5e-12, 1e-12, 2e-12];
+  const fom = lastMain.res.sndr + 10 * Math.log10(50e6 / lastMain.pwr.total);
+  drawXY('sw1', xs, out.map(o => o.sndr), { cur: [cur, lastMain.res.sndr], xticks: xt, fmt: y => `SNDR ${y.toFixed(1)} dB`, minSpan: 1 });
+  drawXY('sw2', xs, out.map(o => o.pw * 1e3), { cur: [cur, lastMain.pwr.total * 1e3], xticks: xt, fmt: y => `${y.toFixed(2)} mW`, tick: t => t.toFixed(t < 10 ? 1 : 0), minSpan: 0.2 });
+  drawXY('sw3', xs, out.map(o => o.fom), { cur: [cur, fom], xticks: xt, fmt: y => `FoMs ${y.toFixed(1)} dB`, refs: [['Zhao 173.1', 173.1], ['Lin 171.3', 171.25], ['Jie 166.3', 166.25]], minSpan: 1 });
+  $('swTable').innerHTML = `<tr><th>${v === 'Cs' ? 'Cs' : 'C_H'}</th><th class="n">SNDR dB</th><th class="n">전력 mW</th><th class="n">FoMs dB</th><th class="n">fs/3 spur dBFS</th></tr>` +
+    out.map(o => `<tr><td>${fmtF(o.x)}</td><td class="n">${o.sndr.toFixed(1)}</td><td class="n">${(o.pw * 1e3).toFixed(2)}</td><td class="n">${o.fom.toFixed(1)}</td><td class="n">${o.off.toFixed(1)}</td></tr>`).join('');
+}
+
+// ---------- 이벤트 ----------
+const press = (ids, on) => ids.forEach(id => $(id).setAttribute('aria-pressed', String(id === on)));
+function setAxis(log) { axisLog = log; press(['axLog', 'axLin'], log ? 'axLog' : 'axLin'); drawFFT(); }
+function setView(v) { view = v; press(['vwBand', 'vwFull', 'vwFs3'], { band: 'vwBand', full: 'vwFull', fs3: 'vwFs3' }[v]); $('axLog').disabled = $('axLin').disabled = v === 'fs3'; drawFFT(); }
+function setY(z) { yZoom = z; press(['yZoom', 'yAll'], z ? 'yZoom' : 'yAll'); drawFFT(); }
+$('axLog').addEventListener('click', () => setAxis(true));
+$('axLin').addEventListener('click', () => setAxis(false));
+$('vwBand').addEventListener('click', () => setView('band'));
+$('vwFull').addEventListener('click', () => setView('full'));
+$('vwFs3').addEventListener('click', () => setView('fs3'));
+$('yZoom').addEventListener('click', () => setY(true));
+$('yAll').addEventListener('click', () => setY(false));
+$('rawChk').addEventListener('change', e => { showRaw = e.target.checked; drawFFT(); });
+function setSweep(v) { sweepVar = v; $('swCs').setAttribute('aria-pressed', String(v === 'Cs')); $('swCH').setAttribute('aria-pressed', String(v === 'CH')); runSweep(); }
+$('swCs').addEventListener('click', () => setSweep('Cs'));
+$('swCH').addEventListener('click', () => setSweep('CH'));
+$('pinBtn').addEventListener('click', () => {
+  if (!lastMain) return;
+  traces.pin = mkTrace(lastMain.res, col('s2'), '고정');
+  traces.pin.tag = `Cs ${fmtF(P.Cs)}, C_H ${fmtF(P.CH)}`;
+  drawFFT();
+});
+let rz = null;
+window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { drawFFT(); drawSweeps(); }, 100); });
+const rethem = () => { if (!lastMain) return; traces.cur.color = col('s1'); if (traces.off) traces.off.color = col('ref'); if (traces.pin) traces.pin.color = col('s2'); drawFFT(); renderPower(); drawSweeps(); };
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rethem); } catch (e) {}
+new MutationObserver(rethem).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+sync(); runMain(); runSweep();
+})();
+</script>
+
+</body>
+</html>
