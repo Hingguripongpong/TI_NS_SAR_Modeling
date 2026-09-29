@@ -571,7 +571,8 @@ const col = n => css().getPropertyValue('--' + n).trim();
 // ---------- 캔버스 공통 ----------
 function setupCanvas(cv) {
   const dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth, h = +cv.getAttribute('height');
+  if (!cv.dataset.h) cv.dataset.h = cv.getAttribute('height');   // 원래 CSS 높이 고정 (canvas.height 설정 시 속성이 바뀌므로)
+  const w = cv.clientWidth, h = +cv.dataset.h;
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
     cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.height = h + 'px';
   }
