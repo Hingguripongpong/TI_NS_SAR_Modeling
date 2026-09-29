@@ -651,7 +651,12 @@ function drawFFT() {
     ctx.textAlign = 'right'; ctx.fillText(String(v), m.l - 6, y);
   }
   let xt;
-  if (vr.log) xt = [0.5e6, 1e6, 2e6, 5e6, 10e6, 20e6, 50e6, 100e6, 200e6].filter(f => f >= vr.f0 && f <= vr.f1);
+  if (vr.log) {   // 10배 단위 눈금 + 2~9 보조선
+    xt = [1e6, 10e6, 100e6].filter(f => f >= vr.f0 && f <= vr.f1);
+    ctx.save(); ctx.globalAlpha = 0.45;
+    [1e5, 1e6, 1e7, 1e8].forEach(dec => { for (let k = 2; k <= 9; k++) { const f = dec * k; if (f <= vr.f0 || f >= vr.f1) continue; const x = Math.round(fx(f)) + 0.5; ctx.beginPath(); ctx.moveTo(x, m.t); ctx.lineTo(x, m.t + ph); ctx.stroke(); } });
+    ctx.restore();
+  }
   else if (view === 'band') xt = [0, 10e6, 20e6, 30e6, 40e6, 50e6];
   else if (view === 'fs3') xt = [110e6, 120e6, 130e6, 140e6, 150e6, 160e6];
   else xt = [0, 25e6, 50e6, 75e6, 100e6, 125e6, 150e6, 175e6, 200e6];
